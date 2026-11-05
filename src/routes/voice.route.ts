@@ -3,10 +3,12 @@ import { Router } from 'express';
 import { agents } from '../data/store';
 import { AgentModel } from '../models/agent.model';
 import { authMiddleware } from '../middleware/authMiddleware';
+import { config } from '../config/env';
 import { ConversationModel } from '../models/conversation.model';
 import { MessageModel } from '../models/message.model';
 import { DocumentModel } from '../models/document.model';
 import { GeminiService } from '../services/gemini.service';
+import { issueTranscriptionTicket } from '../services/gemini-transcription-proxy';
 import { conversations, documents, messages } from '../data/store';
 import type { Agent, AuthenticatedRequest, Message } from '../types';
 
@@ -49,6 +51,7 @@ router.post('/session', authMiddleware, async (req: AuthenticatedRequest, res) =
         language: storedAgent.language,
         instructions: storedAgent.instructions,
         welcomeMessage: storedAgent.welcomeMessage,
+        conversationScript: storedAgent.conversationScript ?? '',
         speakingStyle: storedAgent.speakingStyle,
         responseBehavior: storedAgent.responseBehavior,
         temperature: storedAgent.temperature,
@@ -94,7 +97,15 @@ router.post('/session', authMiddleware, async (req: AuthenticatedRequest, res) =
       .map((document) => ({ name: document.name, content: document.content }));
   }
 
-  const session = await GeminiService.createVoiceSession(agent, documentContexts);
+  const { timeZone } = req.body as { timeZone?: string };
+  if (timeZone !== undefined) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone }).format();
+    } catch {
+      return res.status(400).json({ message: 'Provide a valid time zone for the voice session.' });
+    }
+  }
+  const session = await GeminiService.createVoiceSession(agent, documentContexts, timeZone ?? 'UTC');
   if (mongoose.connection.readyState === 1) {
     const conversation = await ConversationModel.create({
       userId: user.id,
@@ -118,6 +129,35 @@ router.post('/session', authMiddleware, async (req: AuthenticatedRequest, res) =
   }
 
   return res.json(session);
+});
+
+router.post('/transcription-ticket', authMiddleware, async (req: AuthenticatedRequest, res) => {
+  const user = req.user;
+  const { sessionId } = req.body as { sessionId?: string };
+  if (!user) return res.status(401).json({ message: 'Authentication required.' });
+  if (!sessionId) return res.status(400).json({ message: 'A voice session is required.' });
+  if (!config.geminiApiKey) {
+    return res.status(503).json({ message: 'GEMINI_API_KEY is not configured on the backend.' });
+  }
+
+  if (mongoose.connection.readyState === 1) {
+    if (!mongoose.isValidObjectId(sessionId)) {
+      return res.status(404).json({ message: 'Voice session not found.' });
+    }
+    const conversation = await ConversationModel.findOne({
+      _id: sessionId,
+      userId: user.id,
+      status: 'active',
+    }).select('_id').lean();
+    if (!conversation) return res.status(404).json({ message: 'Active voice session not found.' });
+  } else {
+    const conversation = conversations.find(
+      (entry) => entry.id === sessionId && entry.userId === user.id && entry.status === 'active',
+    );
+    if (!conversation) return res.status(404).json({ message: 'Active voice session not found.' });
+  }
+
+  return res.json({ ticket: issueTranscriptionTicket(sessionId) });
 });
 
 router.post('/session/end', authMiddleware, async (req: AuthenticatedRequest, res) => {

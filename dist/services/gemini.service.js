@@ -83,6 +83,26 @@ async function getContentModels() {
     }
     return orderedModels.slice(0, 3).map((model) => model.name.replace(/^models\//, ''));
 }
+async function createLiveToken() {
+    const now = Date.now();
+    const response = await fetchGemini(`${apiBaseUrl}/auth_tokens`, {
+        method: 'POST',
+        headers: {
+            'x-goog-api-key': env_1.config.geminiApiKey,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            uses: 1,
+            expireTime: new Date(now + 30 * 60 * 1000).toISOString(),
+            newSessionExpireTime: new Date(now + 60 * 1000).toISOString(),
+        }),
+    });
+    const body = (await response.json());
+    if (!response.ok || !body.name) {
+        throw new GeminiServiceError(body.error?.message ?? 'Gemini did not issue a short-lived Live session token.', 502);
+    }
+    return body.name;
+}
 class GeminiService {
     static async createVoicePreviewSession(voice) {
         return this.createVoiceSession({
@@ -97,6 +117,7 @@ class GeminiService {
             language: 'English',
             instructions: 'Speak the preview greeting exactly as written, without adding anything.',
             welcomeMessage: `Hello there. This is a preview of the ${voice} voice.`,
+            conversationScript: '',
             speakingStyle: 'Natural and friendly',
             responseBehavior: 'Balanced',
             temperature: 0.7,
@@ -104,7 +125,7 @@ class GeminiService {
             deployment: { browserVoice: true, inboundCalls: false, outboundCalls: false },
             conversationCount: 0,
             lastActive: 'just now',
-        });
+        }, [], 'UTC');
     }
     static async embedTexts(texts, taskType) {
         if (!env_1.config.geminiApiKey) {
@@ -205,37 +226,31 @@ class GeminiService {
         }
         throw new GeminiServiceError(lastFailure, 502);
     }
-    static async createVoiceSession(agent, documentContexts = []) {
+    static async createVoiceSession(agent, documentContexts = [], timeZone = 'UTC') {
         if (!env_1.config.geminiApiKey) {
             throw new GeminiServiceError('GEMINI_API_KEY is not configured on the backend.', 503);
         }
         const model = await getLiveModel();
-        const now = Date.now();
-        const tokenResponse = await fetchGemini(`${apiBaseUrl}/auth_tokens`, {
-            method: 'POST',
-            headers: {
-                'x-goog-api-key': env_1.config.geminiApiKey,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                uses: 1,
-                expireTime: new Date(now + 30 * 60 * 1000).toISOString(),
-                newSessionExpireTime: new Date(now + 60 * 1000).toISOString(),
-            }),
-        });
-        const tokenBody = (await tokenResponse.json());
-        if (!tokenResponse.ok || !tokenBody.name) {
-            throw new GeminiServiceError(tokenBody.error?.message ?? 'Gemini did not issue a short-lived Live session token.', 502);
-        }
+        const ephemeralToken = await createLiveToken();
+        const localTime = new Intl.DateTimeFormat('en-US', {
+            timeZone,
+            hour: 'numeric',
+            minute: '2-digit',
+            hourCycle: 'h23',
+        }).format(new Date());
+        const localHour = Number(localTime.split(':')[0]);
+        const timeGreeting = localHour < 12 ? 'Good morning' : localHour < 17 ? 'Good afternoon' : 'Good evening';
         const identity = agent.name ? `You are ${agent.name}, a voice AI agent.` : 'You are a voice AI agent.';
         const systemInstruction = [
             identity,
             `Speak naturally and clearly in ${agent.language || 'English'}.`,
             agent.instructions,
-            `At the beginning of the call, greet the user with: "${agent.welcomeMessage}"`,
+            'Respond in complete, natural sentences. Give enough detail to fully answer what the caller asked; do not make answers so brief that important information is missing. Usually use one to three sentences for a simple question and expand when the caller asks for details or the topic needs it. Keep spoken responses easy to follow and avoid unnecessary repetition.',
+            `The caller's local time is ${localTime} (${timeZone}). Begin promptly with "${timeGreeting}", identify yourself as ${agent.name || 'the voice assistant'}, then continue with the configured welcome message: "${agent.welcomeMessage}". Remove any greeting at the beginning of that message if it would repeat or conflict with the time-appropriate greeting. Mention the business or salon name only if it is stated in the knowledge-base documents; never guess it.`,
+            `Follow this conversation script as a flexible step-by-step flow; do not recite it all at once: ${agent.conversationScript || 'Greet the caller, ask how you can help, answer one step at a time, and thank them before ending.'}`,
+            'For business-specific questions, use the knowledge-base documents as the source of truth. If the documents do not provide the answer, say so clearly and offer an appropriate next step; do not invent business details.',
             ...(documentContexts.length > 0
                 ? [
-                    'Use the following user-provided documents as the source of truth when answering questions about the user’s business. Do not invent details missing from these documents; clearly say when the documents do not contain the answer.',
                     documentContexts
                         .map(({ name, content }) => `DOCUMENT: ${name}\n${content}`)
                         .join('\n\n---\n\n')
@@ -249,7 +264,7 @@ class GeminiService {
             model,
             provider: 'Google Gemini',
             message: `Secure Live token ready for ${agent.name}. Connect your microphone to start speaking.`,
-            ephemeralToken: tokenBody.name,
+            ephemeralToken,
             websocketUrl: websocketBaseUrl,
             voiceName: agent.voice,
             systemInstruction,

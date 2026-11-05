@@ -1,5 +1,6 @@
 import cors from 'cors';
 import express from 'express';
+import { createServer } from 'node:http';
 import { mkdirSync } from 'node:fs';
 import { config } from './config/env';
 import { errorMiddleware } from './middleware/errorMiddleware';
@@ -10,6 +11,7 @@ import conversationsRouter from './routes/conversations.route';
 import dashboardRouter from './routes/dashboard.route';
 import documentsRouter from './routes/documents.route';
 import voiceRouter from './routes/voice.route';
+import { attachGeminiTranscriptionProxy } from './services/gemini-transcription-proxy';
 
 const app = express();
 
@@ -50,7 +52,9 @@ app.use('/api/voice', voiceRouter);
 app.use(errorMiddleware);
 
 void connectDatabase().then(() => {
-  app.listen(config.port, () => {
+  const server = createServer(app);
+  attachGeminiTranscriptionProxy(server);
+  server.listen(config.port, () => {
     console.log(`VoicePilot API running on http://localhost:${config.port}`);
   });
 });

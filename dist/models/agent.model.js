@@ -50,6 +50,10 @@ const agentSchema = new mongoose_1.Schema({
     language: { type: String, required: true },
     instructions: { type: String, default: 'Be helpful, concise, and friendly.' },
     welcomeMessage: { type: String, default: 'Hello! I can help you get started.' },
+    conversationScript: {
+        type: String,
+        default: 'Greet the caller warmly. Ask how you can help, then listen and respond one step at a time. Use the knowledge base for business details and never guess. Thank the caller before ending the conversation.',
+    },
     speakingStyle: { type: String, default: 'Natural and friendly' },
     responseBehavior: { type: String, default: 'Balanced' },
     temperature: { type: Number, min: 0, max: 1, default: 0.7 },

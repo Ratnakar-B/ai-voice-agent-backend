@@ -23,6 +23,7 @@ const normalizeAgent = (agent) => ({
     language: agent.language,
     instructions: agent.instructions ?? 'Be helpful, concise, and friendly.',
     welcomeMessage: agent.welcomeMessage ?? 'Hello! I can help you get started.',
+    conversationScript: agent.conversationScript ?? '',
     speakingStyle: agent.speakingStyle ?? 'Natural and friendly',
     responseBehavior: agent.responseBehavior ?? 'Balanced',
     temperature: agent.temperature ?? 0.7,
@@ -93,7 +94,7 @@ router.get('/', authMiddleware_1.authMiddleware, async (req, res) => {
 });
 router.post('/', authMiddleware_1.authMiddleware, async (req, res) => {
     const currentUser = req.user;
-    const { name, description, voice, language, model, instructions, welcomeMessage, avatar } = req.body;
+    const { name, description, voice, language, model, instructions, welcomeMessage, conversationScript, avatar } = req.body;
     if (!name || !description || !voice || !language) {
         return res.status(400).json({ message: 'Agent name, description, voice, and language are required.' });
     }
@@ -112,6 +113,7 @@ router.post('/', authMiddleware_1.authMiddleware, async (req, res) => {
             language,
             instructions: instructions ?? 'Be helpful, concise, and friendly.',
             welcomeMessage: welcomeMessage ?? 'Hello! I can help you get started.',
+            conversationScript: conversationScript ?? '',
             speakingStyle: 'Natural and friendly',
             responseBehavior: 'Balanced',
             temperature: 0.7,
@@ -134,6 +136,7 @@ router.post('/', authMiddleware_1.authMiddleware, async (req, res) => {
         language,
         instructions: instructions ?? 'Be helpful, concise, and friendly.',
         welcomeMessage: welcomeMessage ?? 'Hello! I can help you get started.',
+        conversationScript: conversationScript ?? '',
         speakingStyle: 'Natural and friendly',
         responseBehavior: 'Balanced',
         temperature: 0.7,
@@ -161,12 +164,12 @@ router.get('/:id', authMiddleware_1.authMiddleware, async (req, res) => {
 router.put('/:id', authMiddleware_1.authMiddleware, async (req, res) => {
     const currentUser = req.user;
     const body = req.body;
-    const allowedFields = ['name', 'description', 'status', 'model', 'voice', 'language', 'instructions', 'welcomeMessage', 'avatar'];
+    const allowedFields = ['name', 'description', 'status', 'model', 'voice', 'language', 'instructions', 'welcomeMessage', 'conversationScript', 'avatar'];
     const updates = {};
     for (const field of allowedFields) {
         const value = body[field];
         if (value !== undefined) {
-            if (typeof value !== 'string' || value.trim().length === 0) {
+            if (typeof value !== 'string' || (field !== 'conversationScript' && value.trim().length === 0)) {
                 return res.status(400).json({ message: `${field} must be a non-empty string.` });
             }
             if (field === 'avatar' && !agentAvatars.has(value)) {
