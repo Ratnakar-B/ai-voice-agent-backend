@@ -15,7 +15,7 @@ const store_1 = require("../data/store");
 const authMiddleware_1 = require("../middleware/authMiddleware");
 const document_model_1 = require("../models/document.model");
 const documentChunk_model_1 = require("../models/documentChunk.model");
-const gemini_service_1 = require("../services/gemini.service");
+const ai_service_1 = require("../services/ai.service");
 const rag_service_1 = require("../services/rag.service");
 const router = (0, express_1.Router)();
 const supportedExtensions = new Set(['.txt', '.md', '.csv', '.pdf', '.docx']);
@@ -42,6 +42,31 @@ const normalizeDocument = (doc) => ({
         : doc.status ?? 'processing',
     uploadedAt: doc.uploadedAt ? new Date(doc.uploadedAt).toISOString() : new Date().toISOString(),
 });
+function parseStoredFileSize(size) {
+    const match = size.trim().match(/^([\d.]+)\s*(bytes?|b|kb|kib|mb|mib|gb|gib)?$/i);
+    if (!match)
+        throw new Error('A document has an invalid stored file size.');
+    const amount = Number(match[1]);
+    if (!Number.isFinite(amount) || amount < 0) {
+        throw new Error('A document has an invalid stored file size.');
+    }
+    const unit = (match[2] ?? 'B').toLowerCase();
+    const multiplier = unit.startsWith('g') ? 1024 ** 3
+        : unit.startsWith('m') ? 1024 ** 2
+            : unit.startsWith('k') ? 1024
+                : 1;
+    return amount * multiplier;
+}
+function formatFileSize(bytes) {
+    if (bytes === 0)
+        return '0 B';
+    if (bytes >= 1024 ** 2) {
+        return `${(bytes / 1024 ** 2).toFixed(bytes >= 10 * 1024 ** 2 ? 0 : 1)} MB`;
+    }
+    if (bytes >= 1024)
+        return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    return `${Math.max(1, Math.round(bytes))} B`;
+}
 const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 async function extractText(filePath, originalName) {
     const extension = (0, node_path_1.extname)(originalName).toLowerCase();
@@ -71,6 +96,7 @@ router.post('/upload', authMiddleware_1.authMiddleware, upload.single('file'), a
             userId: currentUser.id,
             name: file.originalname,
             size: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+            sizeBytes: file.size,
             status: 'processing',
             content: cappedContent,
             uploadedAt: new Date(),
@@ -175,14 +201,14 @@ router.post('/ask', authMiddleware_1.authMiddleware, async (req, res) => {
         if (!document || typeof document.content !== 'string' || !document.content.trim()) {
             return res.json({ answer: 'I found a matching document, but its full text is unavailable. Please upload it again.' });
         }
-        const answer = await gemini_service_1.GeminiService.answerFromDocuments(normalizedQuestion, [{ name: document.name, content: document.content }], { comprehensive: true });
+        const answer = await (0, ai_service_1.answerFromDocuments)(normalizedQuestion, [{ name: document.name, content: document.content }], { comprehensive: true });
         return res.json({ answer });
     }
     const relevantChunks = await rag_service_1.RagService.findRelevantChunks(currentUser.id, normalizedQuestion);
     if (relevantChunks.length === 0) {
         return res.json({ answer: 'I could not find relevant information in your indexed documents.' });
     }
-    const answer = await gemini_service_1.GeminiService.answerFromDocuments(normalizedQuestion, relevantChunks);
+    const answer = await (0, ai_service_1.answerFromDocuments)(normalizedQuestion, relevantChunks);
     return res.json({ answer });
 });
 router.get('/', authMiddleware_1.authMiddleware, async (req, res) => {
@@ -207,6 +233,20 @@ router.get('/', authMiddleware_1.authMiddleware, async (req, res) => {
     if (sort !== 'newest' && sort !== 'oldest' && sort !== 'name') {
         return res.status(400).json({ message: 'Choose a valid document sort order.' });
     }
+    const libraryDocuments = mongoose_1.default.connection.readyState === 1
+        ? await document_model_1.DocumentModel.find({ userId: currentUser.id }).select('size sizeBytes').lean()
+        : store_1.documents.filter((document) => document.userId === currentUser.id);
+    const totalBytes = libraryDocuments.reduce((total, document) => {
+        const storedSizeBytes = 'sizeBytes' in document ? document.sizeBytes : undefined;
+        if (storedSizeBytes !== undefined) {
+            if (!Number.isFinite(storedSizeBytes) || storedSizeBytes < 0) {
+                throw new Error('A document has an invalid stored file size.');
+            }
+            return total + storedSizeBytes;
+        }
+        return total + parseStoredFileSize(document.size);
+    }, 0);
+    const storage = { totalBytes, totalSize: formatFileSize(totalBytes) };
     if (mongoose_1.default.connection.readyState === 1) {
         const query = { userId: currentUser.id };
         const nameFilters = [];
@@ -232,7 +272,7 @@ router.get('/', authMiddleware_1.authMiddleware, async (req, res) => {
             ? { name: 1 }
             : { uploadedAt: sort === 'oldest' ? 1 : -1 };
         const list = await document_model_1.DocumentModel.find(query).sort(sortOrder).lean();
-        return res.json(list.map(normalizeDocument));
+        return res.json({ documents: list.map(normalizeDocument), ...storage });
     }
     const filteredDocuments = store_1.documents.filter((doc) => {
         if (doc.userId !== currentUser.id)
@@ -251,7 +291,7 @@ router.get('/', authMiddleware_1.authMiddleware, async (req, res) => {
         const difference = new Date(left.uploadedAt).getTime() - new Date(right.uploadedAt).getTime();
         return sort === 'oldest' ? difference : -difference;
     });
-    return res.json(filteredDocuments.map(normalizeDocument));
+    return res.json({ documents: filteredDocuments.map(normalizeDocument), ...storage });
 });
 router.delete('/:id', authMiddleware_1.authMiddleware, async (req, res) => {
     const currentUser = req.user;

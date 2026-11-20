@@ -10,6 +10,7 @@ import { documents } from '../data/store';
 import { authMiddleware } from '../middleware/authMiddleware';
 import { DocumentModel } from '../models/document.model';
 import { DocumentChunkModel } from '../models/documentChunk.model';
+import { answerFromDocuments } from '../services/ai.service';
 import { GeminiService } from '../services/gemini.service';
 import { RagService, RagServiceError } from '../services/rag.service';
 import type { AuthenticatedRequest } from '../types';
@@ -42,6 +43,32 @@ const normalizeDocument = (doc: any) => ({
       : doc.status ?? 'processing',
   uploadedAt: doc.uploadedAt ? new Date(doc.uploadedAt).toISOString() : new Date().toISOString(),
 });
+
+function parseStoredFileSize(size: string): number {
+  const match = size.trim().match(/^([\d.]+)\s*(bytes?|b|kb|kib|mb|mib|gb|gib)?$/i);
+  if (!match) throw new Error('A document has an invalid stored file size.');
+
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw new Error('A document has an invalid stored file size.');
+  }
+
+  const unit = (match[2] ?? 'B').toLowerCase();
+  const multiplier = unit.startsWith('g') ? 1024 ** 3
+    : unit.startsWith('m') ? 1024 ** 2
+      : unit.startsWith('k') ? 1024
+        : 1;
+  return amount * multiplier;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  if (bytes >= 1024 ** 2) {
+    return `${(bytes / 1024 ** 2).toFixed(bytes >= 10 * 1024 ** 2 ? 0 : 1)} MB`;
+  }
+  if (bytes >= 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${Math.max(1, Math.round(bytes))} B`;
+}
 
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -77,6 +104,7 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req: Authen
       userId: currentUser!.id,
       name: file.originalname,
       size: `${Math.max(1, Math.round(file.size / 1024))} KB`,
+      sizeBytes: file.size,
       status: 'processing',
       content: cappedContent,
       uploadedAt: new Date(),
@@ -188,7 +216,7 @@ router.post('/ask', authMiddleware, async (req: AuthenticatedRequest, res) => {
       return res.json({ answer: 'I found a matching document, but its full text is unavailable. Please upload it again.' });
     }
 
-    const answer = await GeminiService.answerFromDocuments(
+    const answer = await answerFromDocuments(
       normalizedQuestion,
       [{ name: document.name, content: document.content }],
       { comprehensive: true },
@@ -201,7 +229,7 @@ router.post('/ask', authMiddleware, async (req: AuthenticatedRequest, res) => {
     return res.json({ answer: 'I could not find relevant information in your indexed documents.' });
   }
 
-  const answer = await GeminiService.answerFromDocuments(normalizedQuestion, relevantChunks);
+  const answer = await answerFromDocuments(normalizedQuestion, relevantChunks);
   return res.json({ answer });
 });
 
@@ -229,6 +257,22 @@ router.get('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
     return res.status(400).json({ message: 'Choose a valid document sort order.' });
   }
 
+  const libraryDocuments = mongoose.connection.readyState === 1
+    ? await DocumentModel.find({ userId: currentUser.id }).select('size sizeBytes').lean()
+    : documents.filter((document) => document.userId === currentUser.id);
+  const totalBytes = libraryDocuments.reduce((total, document) => {
+    const storedSizeBytes = 'sizeBytes' in document ? document.sizeBytes : undefined;
+    if (storedSizeBytes !== undefined) {
+      if (!Number.isFinite(storedSizeBytes) || storedSizeBytes < 0) {
+        throw new Error('A document has an invalid stored file size.');
+      }
+      return total + storedSizeBytes;
+    }
+
+    return total + parseStoredFileSize(document.size);
+  }, 0);
+  const storage = { totalBytes, totalSize: formatFileSize(totalBytes) };
+
   if (mongoose.connection.readyState === 1) {
     const query: Record<string, unknown> = { userId: currentUser.id };
     const nameFilters: Array<Record<string, unknown>> = [];
@@ -249,7 +293,7 @@ router.get('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
       ? { name: 1 }
       : { uploadedAt: sort === 'oldest' ? 1 : -1 };
     const list = await DocumentModel.find(query).sort(sortOrder).lean();
-    return res.json(list.map(normalizeDocument));
+    return res.json({ documents: list.map(normalizeDocument), ...storage });
   }
 
   const filteredDocuments = documents.filter((doc) => {
@@ -264,7 +308,7 @@ router.get('/', authMiddleware, async (req: AuthenticatedRequest, res) => {
     const difference = new Date(left.uploadedAt).getTime() - new Date(right.uploadedAt).getTime();
     return sort === 'oldest' ? difference : -difference;
   });
-  return res.json(filteredDocuments.map(normalizeDocument));
+  return res.json({ documents: filteredDocuments.map(normalizeDocument), ...storage });
 });
 
 router.delete('/:id', authMiddleware, async (req: AuthenticatedRequest, res) => {

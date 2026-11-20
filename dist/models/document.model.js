@@ -39,6 +39,7 @@ const documentSchema = new mongoose_1.Schema({
     userId: { type: mongoose_1.Schema.Types.ObjectId, ref: 'User', required: true },
     name: { type: String, required: true },
     size: { type: String, required: true },
+    sizeBytes: { type: Number },
     content: { type: String, required: true, select: false },
     status: { type: String, enum: ['ready', 'processing', 'failed'], default: 'ready' },
     uploadedAt: { type: Date, default: Date.now },

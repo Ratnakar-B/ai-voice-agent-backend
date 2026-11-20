@@ -45,6 +45,8 @@ UPLOAD_DIR=uploads
 
 Use a MongoDB Atlas cluster with Vector Search enabled for knowledge-base search. Configure the vector index with the same dimensions as `GEMINI_EMBEDDING_DIMENSIONS` (3072 by default). Keep `ALLOWED_ORIGINS` aligned with the frontend's actual development or production URL. Local MongoDB can be used for other API functionality, but it does not provide the Atlas Vector Search required by RAG.
 
+Knowledge-base answers use LangChain's `ChatGoogle` integration with `GEMINI_MODEL`. Keep `GEMINI_API_KEY` on the backend; the frontend does not need LangChain or the provider key.
+
 ## Run in development
 
 ```powershell

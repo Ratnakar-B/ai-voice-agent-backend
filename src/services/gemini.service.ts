@@ -99,50 +99,6 @@ async function getLiveModel(): Promise<string> {
   return selectedModel.name.replace(/^models\//, '');
 }
 
-async function getContentModels(): Promise<string[]> {
-  const headers = { 'x-goog-api-key': config.geminiApiKey };
-  const configuredModel = config.geminiModel.replace(/^models\//, '');
-  const modelsResponse = await fetchGemini(`${apiBaseUrl}/models?pageSize=1000`, { headers });
-  const modelsBody = (await modelsResponse.json()) as {
-    models?: GeminiModel[];
-    error?: { message?: string };
-  };
-  if (!modelsResponse.ok) {
-    throw new GeminiServiceError(
-      modelsBody.error?.message ?? 'Could not retrieve available Gemini text models.',
-      502,
-    );
-  }
-
-  const contentModels = (modelsBody.models ?? []).filter((model) =>
-    model.supportedGenerationMethods?.includes('generateContent'),
-  );
-  const priorities = [
-    'gemini-3.8-flash',
-    ...(configuredModel === 'gemini-2.5-flash' ? [] : [configuredModel]),
-    'gemini-3.7-flash',
-    'gemini-3.6-flash',
-    'gemini-flash-latest',
-    'gemini-3.5-flash',
-  ];
-  const orderedModels = priorities
-    .map((name) => contentModels.find((model) => model.name === `models/${name}`))
-    .filter((model): model is GeminiModel => model !== undefined);
-  for (const model of contentModels) {
-    if (/gemini-.*-flash(?:-latest)?$/.test(model.name) && !orderedModels.includes(model)) {
-      orderedModels.push(model);
-    }
-  }
-  if (orderedModels.length === 0) {
-    throw new GeminiServiceError(
-      `The configured Gemini text model "${configuredModel}" is unavailable, and no supported content model was found for this API key.`,
-      503,
-    );
-  }
-
-  return orderedModels.slice(0, 3).map((model) => model.name.replace(/^models\//, ''));
-}
-
 async function createLiveToken(): Promise<string> {
   const now = Date.now();
   const response = await fetchGemini(`${apiBaseUrl}/auth_tokens`, {
@@ -247,83 +203,6 @@ export class GeminiService {
     }
 
     return embeddings;
-  }
-
-  static async answerFromDocuments(
-    question: string,
-    documentContexts: Array<{ name: string; content: string }>,
-    options: { comprehensive?: boolean } = {},
-  ): Promise<string> {
-    if (!config.geminiApiKey) {
-      throw new GeminiServiceError('GEMINI_API_KEY is not configured on the backend.', 503);
-    }
-
-    if (documentContexts.length === 0) {
-      throw new GeminiServiceError('Upload a document before asking a knowledge-base question.', 400);
-    }
-
-    const context = documentContexts
-      .map(({ name, content }) => `DOCUMENT: ${name}\n${content}`)
-      .join('\n\n---\n\n')
-      .slice(0, options.comprehensive ? 100000 : 40000);
-    const systemInstruction = options.comprehensive
-      ? 'Answer using only the supplied complete document text. The user wants comprehensive details, so explain the document section by section in the original order, covering the key facts, instructions, people, dates, numbers, and conclusions present. Do not limit the answer to the first sections or only the most relevant passages. Do not invent details; clearly identify information the document does not contain. Summarize faithfully rather than claiming to reproduce text verbatim.'
-      : 'Answer using only the supplied document excerpts. If they do not contain the answer, say that the uploaded documents do not provide enough information. Do not invent facts or citations.';
-    const models = await getContentModels();
-    let lastFailure = 'Gemini could not answer from the uploaded documents.';
-
-    for (const model of models) {
-      try {
-        const response = await fetchGemini(
-          `${apiBaseUrl}/models/${encodeURIComponent(model)}:generateContent`,
-          {
-            method: 'POST',
-            headers: {
-              'x-goog-api-key': config.geminiApiKey,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              systemInstruction: {
-                parts: [
-                  {
-                    text: systemInstruction,
-                  },
-                ],
-              },
-              contents: [
-                {
-                  role: 'user',
-                  parts: [{ text: `Question: ${question}\n\nDocument excerpts:\n${context}` }],
-                },
-              ],
-            }),
-          },
-        );
-        const body = (await response.json()) as {
-          candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-          error?: { message?: string };
-        };
-
-        if (response.ok) {
-          const answer = body.candidates?.[0]?.content?.parts
-            ?.map((part) => part.text ?? '')
-            .join('')
-            .trim();
-          if (answer) return answer;
-          throw new GeminiServiceError('Gemini returned an empty answer for the document question.', 502);
-        }
-
-        lastFailure = body.error?.message ?? lastFailure;
-        if (response.status !== 400 && response.status !== 404 && response.status !== 429 && response.status !== 503) {
-          break;
-        }
-      } catch (error) {
-        if (!(error instanceof GeminiServiceError) || error.statusCode !== 504) throw error;
-        lastFailure = error.message;
-      }
-    }
-
-    throw new GeminiServiceError(lastFailure, 502);
   }
 
   static async createVoiceSession(
