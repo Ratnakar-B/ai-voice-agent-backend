@@ -16,6 +16,8 @@ export const connectDatabase = async () => {
       dbName: config.mongodbDbName,
     });
     console.log(`MongoDB connected: ${config.mongodbDbName}`);
+    console.log('MongoDB state:', mongoose.connection.readyState);
+    console.log('MongoDB host:', mongoose.connection.host);
     return true;
   } catch (error) {
     console.error('MongoDB connection failed. Continuing in demo-memory mode.', error);

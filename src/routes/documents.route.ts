@@ -146,7 +146,7 @@ router.post('/ask', authMiddleware, async (req: AuthenticatedRequest, res) => {
   const { question } = req.body as { question?: string };
   const normalizedQuestion = question?.trim();
 
-  if (!normalizedQuestion) return res.status(400).json({ message: 'Enter a question about your documents.' });
+  if (!normalizedQuestion) return res.status(400).json({ message: 'Enter a question.' });
   if (normalizedQuestion.length > 2000) {
     return res.status(400).json({ message: 'Questions must be 2,000 characters or fewer.' });
   }
@@ -189,16 +189,16 @@ router.post('/ask', authMiddleware, async (req: AuthenticatedRequest, res) => {
     );
   }
 
-  const hasIndexedDocuments = await DocumentModel.exists({
+  const hasIndexedDocuments = Boolean(await DocumentModel.exists({
     userId: currentUser.id,
     status: 'ready',
     indexedAt: { $type: 'date' },
-  });
-  if (!hasIndexedDocuments) {
-    return res.status(400).json({ message: 'Upload a readable document before asking a question.' });
-  }
+  }));
 
   if (comprehensiveDocumentRequest.test(normalizedQuestion)) {
+    if (!hasIndexedDocuments) {
+      return res.json({ answer: 'No uploaded document is available to summarize yet.' });
+    }
     const documentId = await RagService.findBestMatchingDocumentId(currentUser.id, normalizedQuestion);
     if (!documentId) {
       return res.json({ answer: 'I could not find a matching indexed document.' });
@@ -224,10 +224,9 @@ router.post('/ask', authMiddleware, async (req: AuthenticatedRequest, res) => {
     return res.json({ answer });
   }
 
-  const relevantChunks = await RagService.findRelevantChunks(currentUser.id, normalizedQuestion);
-  if (relevantChunks.length === 0) {
-    return res.json({ answer: 'I could not find relevant information in your indexed documents.' });
-  }
+  const relevantChunks = hasIndexedDocuments
+    ? await RagService.findRelevantChunks(currentUser.id, normalizedQuestion)
+    : [];
 
   const answer = await answerFromDocuments(normalizedQuestion, relevantChunks);
   return res.json({ answer });

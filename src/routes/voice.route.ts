@@ -16,12 +16,19 @@ const router = Router();
 const supportedVoices = new Set(['Kore', 'Aoede', 'Charon', 'Fenrir', 'Puck']);
 
 router.post('/preview', authMiddleware, async (req: AuthenticatedRequest, res) => {
-  const { voice } = req.body as { voice?: string };
+  const { voice, timeZone } = req.body as { voice?: string; timeZone?: string };
   if (!voice || !supportedVoices.has(voice)) {
     return res.status(400).json({ message: 'Choose a supported voice to preview.' });
   }
+  if (timeZone !== undefined) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone }).format();
+    } catch {
+      return res.status(400).json({ message: 'Provide a valid time zone for the voice preview.' });
+    }
+  }
 
-  const session = await GeminiService.createVoicePreviewSession(voice);
+  const session = await GeminiService.createVoicePreviewSession(voice, timeZone ?? 'UTC');
   return res.json(session);
 });
 

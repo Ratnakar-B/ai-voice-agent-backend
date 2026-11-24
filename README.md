@@ -35,10 +35,12 @@ JWT_SECRET=<use-a-long-random-secret>
 SESSION_SECRET=<use-a-different-long-random-secret>
 GEMINI_API_KEY=<your-gemini-api-key>
 
+# Text generation for knowledge-base answers
 GEMINI_MODEL=gemini-3.8-flash
 GEMINI_EMBEDDING_MODEL=gemini-embedding-001
 GEMINI_EMBEDDING_DIMENSIONS=3072
-GEMINI_LIVE_MODEL=gemini-2.5-flash-native-audio-latest
+# Live voice conversations (not used by knowledge-base chat)
+GEMINI_LIVE_MODEL=gemini-3.8-live
 MONGODB_VECTOR_INDEX=document_chunks_vector_index
 UPLOAD_DIR=uploads
 ```

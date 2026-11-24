@@ -19,6 +19,6 @@ export const config = {
   geminiModel: process.env.GEMINI_MODEL ?? 'gemini-3.8-flash',
   geminiEmbeddingModel: process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-001',
   geminiEmbeddingDimensions: Number(process.env.GEMINI_EMBEDDING_DIMENSIONS ?? 3072),
-  geminiLiveModel: process.env.GEMINI_LIVE_MODEL ?? 'gemini-2.5-flash-native-audio-latest',
+  geminiLiveModel: process.env.GEMINI_LIVE_MODEL ?? 'gemini-3.8-live',
   mongoVectorIndexName: process.env.MONGODB_VECTOR_INDEX ?? 'document_chunks_vector_index',
 };

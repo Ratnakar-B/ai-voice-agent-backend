@@ -139,7 +139,7 @@ router.post('/ask', authMiddleware_1.authMiddleware, async (req, res) => {
     const { question } = req.body;
     const normalizedQuestion = question?.trim();
     if (!normalizedQuestion)
-        return res.status(400).json({ message: 'Enter a question about your documents.' });
+        return res.status(400).json({ message: 'Enter a question.' });
     if (normalizedQuestion.length > 2000) {
         return res.status(400).json({ message: 'Questions must be 2,000 characters or fewer.' });
     }
@@ -177,15 +177,15 @@ router.post('/ask', authMiddleware_1.authMiddleware, async (req, res) => {
             },
         });
     }
-    const hasIndexedDocuments = await document_model_1.DocumentModel.exists({
+    const hasIndexedDocuments = Boolean(await document_model_1.DocumentModel.exists({
         userId: currentUser.id,
         status: 'ready',
         indexedAt: { $type: 'date' },
-    });
-    if (!hasIndexedDocuments) {
-        return res.status(400).json({ message: 'Upload a readable document before asking a question.' });
-    }
+    }));
     if (comprehensiveDocumentRequest.test(normalizedQuestion)) {
+        if (!hasIndexedDocuments) {
+            return res.json({ answer: 'No uploaded document is available to summarize yet.' });
+        }
         const documentId = await rag_service_1.RagService.findBestMatchingDocumentId(currentUser.id, normalizedQuestion);
         if (!documentId) {
             return res.json({ answer: 'I could not find a matching indexed document.' });
@@ -204,10 +204,9 @@ router.post('/ask', authMiddleware_1.authMiddleware, async (req, res) => {
         const answer = await (0, ai_service_1.answerFromDocuments)(normalizedQuestion, [{ name: document.name, content: document.content }], { comprehensive: true });
         return res.json({ answer });
     }
-    const relevantChunks = await rag_service_1.RagService.findRelevantChunks(currentUser.id, normalizedQuestion);
-    if (relevantChunks.length === 0) {
-        return res.json({ answer: 'I could not find relevant information in your indexed documents.' });
-    }
+    const relevantChunks = hasIndexedDocuments
+        ? await rag_service_1.RagService.findRelevantChunks(currentUser.id, normalizedQuestion)
+        : [];
     const answer = await (0, ai_service_1.answerFromDocuments)(normalizedQuestion, relevantChunks);
     return res.json({ answer });
 });

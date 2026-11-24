@@ -19,6 +19,8 @@ const connectDatabase = async () => {
             dbName: env_1.config.mongodbDbName,
         });
         console.log(`MongoDB connected: ${env_1.config.mongodbDbName}`);
+        console.log('MongoDB state:', mongoose_1.default.connection.readyState);
+        console.log('MongoDB host:', mongoose_1.default.connection.host);
         return true;
     }
     catch (error) {

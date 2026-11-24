@@ -18,11 +18,19 @@ const store_2 = require("../data/store");
 const router = (0, express_1.Router)();
 const supportedVoices = new Set(['Kore', 'Aoede', 'Charon', 'Fenrir', 'Puck']);
 router.post('/preview', authMiddleware_1.authMiddleware, async (req, res) => {
-    const { voice } = req.body;
+    const { voice, timeZone } = req.body;
     if (!voice || !supportedVoices.has(voice)) {
         return res.status(400).json({ message: 'Choose a supported voice to preview.' });
     }
-    const session = await gemini_service_1.GeminiService.createVoicePreviewSession(voice);
+    if (timeZone !== undefined) {
+        try {
+            new Intl.DateTimeFormat('en-US', { timeZone }).format();
+        }
+        catch {
+            return res.status(400).json({ message: 'Provide a valid time zone for the voice preview.' });
+        }
+    }
+    const session = await gemini_service_1.GeminiService.createVoicePreviewSession(voice, timeZone ?? 'UTC');
     return res.json(session);
 });
 router.post('/session', authMiddleware_1.authMiddleware, async (req, res) => {

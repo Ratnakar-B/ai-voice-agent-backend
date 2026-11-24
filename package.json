@@ -25,6 +25,7 @@
     "jsonwebtoken": "^9.0.3",
     "mammoth": "^1.13.0",
     "mongoose": "^9.11.4",
+    "morgan": "^1.12.1",
     "multer": "^2.5.0",
     "pdf-parse": "^1.1.4",
     "ws": "^8.22.1"
@@ -33,6 +34,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/morgan": "^1.9.10",
     "@types/multer": "^2.3.0",
     "@types/node": "^26.6.6",
     "@types/pdf-parse": "^1.1.5",

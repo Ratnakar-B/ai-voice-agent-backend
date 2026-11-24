@@ -39,15 +39,20 @@ const apiBaseUrl = 'https://generativelanguage.googleapis.com/v1beta';
 const websocketBaseUrl =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained';
 
+function supportsLiveAudio(modelName: string): boolean {
+  const model = modelName.replace(/^models\//, '');
+  return /^gemini-(?:3\.8-live(?:-extended-thinking)?|3\.1-flash-live-preview|2\.5-flash-native-audio(?:-.+)?)$/i.test(model);
+}
+
 async function fetchGemini(url: string, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(url, {
       ...init,
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(60_000),
     });
   } catch (error) {
     if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-      throw new GeminiServiceError('The Gemini API request timed out. Please try again.', 504);
+      throw new GeminiServiceError('The Gemini API request timed out after 60 seconds. Please try again.', 504);
     }
     const detail = error instanceof Error ? ` ${error.message}` : '';
     throw new GeminiServiceError(`Could not connect to the Gemini API.${detail}`, 502);
@@ -64,7 +69,10 @@ async function getLiveModel(): Promise<string> {
 
   if (configuredResponse.ok) {
     const model = (await configuredResponse.json()) as GeminiModel;
-    if (model.supportedGenerationMethods?.includes('bidiGenerateContent')) {
+    if (
+      model.supportedGenerationMethods?.includes('bidiGenerateContent') &&
+      supportsLiveAudio(model.name)
+    ) {
       return model.name.replace(/^models\//, '');
     }
   }
@@ -81,13 +89,16 @@ async function getLiveModel(): Promise<string> {
     );
   }
 
-  const liveModels = (modelsBody.models ?? []).filter((model) =>
-    model.supportedGenerationMethods?.includes('bidiGenerateContent'),
+  const liveModels = (modelsBody.models ?? []).filter(
+    (model) =>
+      model.supportedGenerationMethods?.includes('bidiGenerateContent') &&
+      supportsLiveAudio(model.name),
   );
   const selectedModel =
+    liveModels.find((model) => model.name === 'models/gemini-3.8-live') ??
+    liveModels.find((model) => model.name === 'models/gemini-3.1-flash-live-preview') ??
     liveModels.find((model) => model.name === 'models/gemini-2.5-flash-native-audio-latest') ??
-    liveModels.find((model) => /native-audio-latest$/.test(model.name)) ??
-    liveModels.find((model) => /live/i.test(model.name));
+    liveModels[0];
 
   if (!selectedModel) {
     throw new GeminiServiceError(
@@ -125,7 +136,7 @@ async function createLiveToken(): Promise<string> {
 }
 
 export class GeminiService {
-  static async createVoicePreviewSession(voice: string): Promise<GeminiSessionResponse> {
+  static async createVoicePreviewSession(voice: string, timeZone = 'UTC'): Promise<GeminiSessionResponse> {
     return this.createVoiceSession({
       id: 'voice-preview',
       userId: '',
@@ -136,7 +147,7 @@ export class GeminiService {
       model: config.geminiLiveModel,
       voice,
       language: 'English',
-      instructions: 'Speak the preview greeting exactly as written, without adding anything.',
+      instructions: 'Use the time-appropriate greeting specified in the system instructions, then say the voice preview welcome message exactly once. Do not substitute a different time-of-day greeting.',
       welcomeMessage: `Hello there. This is a preview of the ${voice} voice.`,
       conversationScript: '',
       speakingStyle: 'Natural and friendly',
@@ -146,7 +157,7 @@ export class GeminiService {
       deployment: { browserVoice: true, inboundCalls: false, outboundCalls: false },
       conversationCount: 0,
       lastActive: 'just now',
-    }, [], 'UTC');
+    }, [], timeZone);
   }
 
   static async embedTexts(
@@ -233,6 +244,7 @@ export class GeminiService {
       'Respond in complete, natural sentences. Give enough detail to fully answer what the caller asked; do not make answers so brief that important information is missing. Usually use one to three sentences for a simple question and expand when the caller asks for details or the topic needs it. Keep spoken responses easy to follow and avoid unnecessary repetition.',
       `The caller's local time is ${localTime} (${timeZone}). Begin promptly with "${timeGreeting}", identify yourself as ${agent.name || 'the voice assistant'}, then continue with the configured welcome message: "${agent.welcomeMessage}". Remove any greeting at the beginning of that message if it would repeat or conflict with the time-appropriate greeting. Mention the business or salon name only if it is stated in the knowledge-base documents; never guess it.`,
       `Follow this conversation script as a flexible step-by-step flow; do not recite it all at once: ${agent.conversationScript || 'Greet the caller, ask how you can help, answer one step at a time, and thank them before ending.'}`,
+      'Treat the final step of the configured conversation script as a required ending: once all script steps are complete, say a brief final farewell, then call end_call immediately after the farewell without waiting for another caller response. Do not end before completing the script. If the caller clearly says they are done before the script is complete, give a brief farewell and call end_call. Never leave the call open after saying goodbye. If tool calling is unavailable, include [END_CALL] only after the spoken farewell.',
       'For business-specific questions, use the knowledge-base documents as the source of truth. If the documents do not provide the answer, say so clearly and offer an appropriate next step; do not invent business details.',
       ...(documentContexts.length > 0
         ? [
